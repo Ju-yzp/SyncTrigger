@@ -34,8 +34,10 @@ struct is_unique_ptr : std::false_type {};
 template <typename T, typename D>
 struct is_unique_ptr<std::unique_ptr<T, D>> : std::true_type {};
 
+// TODO: Implement automatic resource management to replace manual release.
 class SpinLock {
 public:
+    SpinLock() : flag_(false) {}
     void wait() {
         while (flag_.exchange(true, std::memory_order_acquire)) {
             __builtin_ia32_pause();
@@ -120,9 +122,10 @@ public:
             return false;
         }
 
+        bool flag =
+            (get_timestamp(buffer_.front()) >= ts_begin && get_timestamp(buffer_.back()) >= ts_end);
         spin_lock_.release();
-        return (
-            get_timestamp(buffer_.front()) >= ts_begin && get_timestamp(buffer_.back()) >= ts_end);
+        return flag;
     }
 
     bool query_by_time_window(double ts, double tolerance) override {
@@ -132,11 +135,12 @@ public:
             return false;
         }
 
+        bool flag = (get_timestamp(buffer_.back()) <= (ts + tolerance) &&
+                     get_timestamp(buffer_.back()) >= (ts - tolerance)) ||
+                    (get_timestamp(buffer_.front()) <= (ts + tolerance) &&
+                     get_timestamp(buffer_.front()) >= (ts - tolerance));
         spin_lock_.release();
-        return (get_timestamp(buffer_.back()) <= (ts + tolerance) &&
-                get_timestamp(buffer_.back()) >= (ts - tolerance)) ||
-               (get_timestamp(buffer_.front()) <= (ts + tolerance) &&
-                get_timestamp(buffer_.front()) >= (ts - tolerance));
+        return flag;
     }
 
     void get_nearest_data(Callback cb, double ts, double tolerance) override {
@@ -227,7 +231,10 @@ private:
         }
 
         spin_lock_.wait();
-        if (buffer_.empty()) return {};
+        if (buffer_.empty()) {
+            spin_lock_.release();
+            return {};
+        }
 
         auto it_begin = std::lower_bound(
             buffer_.begin(), buffer_.end(), begin_ts,
