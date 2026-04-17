@@ -17,6 +17,19 @@ target_include_directories(
   SyncTrigger INTERFACE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
                         $<INSTALL_INTERFACE:include>)
 
+option(SYNCTRIGGER_BUILD_TESTS "Build unit tests using GTest" ON)
+
+option(SYNCTRIGGER_BUILD_EXAMPLES "Build example applications" OFF)
+
+if(SYNCTRIGGER_BUILD_TESTS)
+  enable_testing()
+  add_subdirectory(tests)
+endif()
+
+if(SYNCTRIGGER_BUILD_EXAMPLES)
+
+endif()
+
 include(CMakePackageConfigHelpers)
 include(GNUInstallDirs)
 
@@ -34,7 +47,7 @@ install(
 
 write_basic_package_version_file(
   "SyncTriggerConfigVersion.cmake"
-  VERSION ${PACKAGE_VERSION}
+  VERSION ${PROJECT_VERSION}
   COMPATIBILITY SameMajorVersion)
 
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/SyncTriggerConfig.cmake"
@@ -45,21 +58,3 @@ install(FILES "${CMAKE_CURRENT_BINARY_DIR}/SyncTriggerConfig.cmake"
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/SyncTrigger)
 
 install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-
-option(SYNCTRIGGER_BUILD_EXAMPLES "Build example applications" ON)
-
-if(SYNCTRIGGER_BUILD_EXAMPLES)
-  find_package(OpenCV REQUIRED)
-  find_package(Eigen3 REQUIRED)
-  find_package(depthai CONFIG REQUIRED)
-
-  add_executable(dataBuffer examples/test_dataBuffer.cpp)
-  target_link_libraries(
-    dataBuffer PRIVATE SyncTrigger::SyncTrigger Eigen3::Eigen depthai::core
-                       ${OpenCV_LIBS})
-
-  add_executable(synchronizer examples/test_synchronizer.cpp)
-  target_link_libraries(
-    synchronizer PRIVATE SyncTrigger::SyncTrigger Eigen3::Eigen depthai::core
-                         ${OpenCV_LIBS})
-endif()
