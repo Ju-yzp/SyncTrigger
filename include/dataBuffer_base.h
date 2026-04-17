@@ -5,12 +5,15 @@
 #include <unistd.h>
 #include <cstdint>
 #include <functional>
+#include <stdexcept>
 
 namespace data {
 // Only supports these sensor types
 enum class SensorType : uint8_t { Camera = 0, LiDAR = 1, IMU = 2, Wheel_Speed_Sensor = 3 };
 
 using Callback = std::function<void(void*)>;
+
+using OnInterpolate = std::function<void(void*, void*, void*)>;
 
 class DataBufferBase {
 public:
@@ -47,7 +50,7 @@ public:
         efd_ = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
 
         if (efd_ < 0) {
-            perror("Failed to create eventfd");
+            throw  std::runtime_error("Failed to create eventfd");
             trigger_flag_ = false;
             return;
         }
@@ -57,9 +60,12 @@ public:
 
     int get_eventfd() const { return efd_; }
 
+    void set_interpolate(OnInterpolate oi) { interpolate_f_ = oi; }
+
 protected:
     bool trigger_flag_ = false;
     int efd_ = -1;
+    OnInterpolate interpolate_f_;
 };
 }  // namespace data
 

@@ -1,12 +1,12 @@
 #ifndef DATA_BUFFER_H_
 #define DATA_BUFFER_H_
 
+// cpp
 #include <algorithm>
 #include <atomic>
 #include <concepts>
 #include <cstddef>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <type_traits>
 #include <utility>
@@ -122,8 +122,14 @@ public:
             return false;
         }
 
-        bool flag =
-            (get_timestamp(buffer_.front()) >= ts_begin && get_timestamp(buffer_.back()) >= ts_end);
+        bool flag = false;
+        if (ts_begin < 0) {
+            flag = get_timestamp(buffer_.back()) >= ts_end;
+        } else {
+            flag =
+                (get_timestamp(buffer_.front()) >= ts_begin &&
+                 get_timestamp(buffer_.back()) >= ts_end);
+        }
         spin_lock_.release();
         return flag;
     }
@@ -227,7 +233,7 @@ private:
 
     std::vector<Handle> selectByRange(const double begin_ts, const double end_ts) {
         if (begin_ts >= end_ts) {
-            std::throw_with_nested(std::runtime_error("begin_ts must be less than end_ts"));
+            throw std::runtime_error("begin_ts must be less than end_ts");
         }
 
         spin_lock_.wait();
@@ -238,17 +244,70 @@ private:
 
         auto it_begin = std::lower_bound(
             buffer_.begin(), buffer_.end(), begin_ts,
-            [this](const Handle& h, double ts) { return get_timestamp(h) < ts; });
+            [this](const Handle& h, double ts) { return this->get_timestamp(h) < ts; });
         auto it_end = std::upper_bound(
             buffer_.begin(), buffer_.end(), end_ts,
-            [this](double ts, const Handle& h) { return ts < get_timestamp(h); });
+            [this](double ts, const Handle& h) { return ts < this->get_timestamp(h); });
+
         std::vector<Handle> result;
-        if constexpr (is_unique_ptr<Handle>::value) {
-            result.assign(std::make_move_iterator(it_begin), std::make_move_iterator(it_end));
+        auto get_ptr = [](auto& handle) -> void* {
+            if constexpr (is_unique_ptr<Handle>::value || is_shared_ptr<Handle>::value) {
+                return static_cast<void*>(handle.get());
+            } else {
+                return static_cast<void*>(&handle);
+            }
+        };
+
+        if (interpolate_f_ && it_end != buffer_.begin() && it_end != buffer_.end()) {
+            auto& lhs = *(it_end - 1);
+            auto& rhs = *it_end;
+
+            Handle res_node;
+            Handle buf_node;
+
+            if constexpr (is_unique_ptr<Handle>::value) {
+                using T = typename Handle::element_type;
+                res_node = std::make_unique<T>(*lhs);
+                buf_node = std::make_unique<T>(*lhs);
+            } else if constexpr (is_shared_ptr<Handle>::value) {
+                using T = typename Handle::element_type;
+                res_node = std::make_shared<T>(*lhs);
+                buf_node = std::make_shared<T>(*lhs);
+            } else {
+                res_node = lhs;
+                buf_node = lhs;
+            }
+            if constexpr (is_unique_ptr<Handle>::value || is_shared_ptr<Handle>::value) {
+                res_node->timestamp = end_ts;
+            } else {
+                res_node.timestamp = end_ts;
+            }
+
+            interpolate_f_(get_ptr(lhs), get_ptr(rhs), get_ptr(res_node));
+
+            if constexpr (is_unique_ptr<Handle>::value || is_shared_ptr<Handle>::value) {
+                *buf_node = *res_node;
+            } else {
+                buf_node = res_node;
+            }
+
+            if constexpr (is_unique_ptr<Handle>::value) {
+                result.assign(std::make_move_iterator(it_begin), std::make_move_iterator(it_end));
+            } else {
+                result.assign(it_begin, it_end);
+            }
+            result.push_back(std::move(res_node));
+            buffer_.erase(buffer_.begin(), it_end);
+            buffer_.insert(buffer_.begin(), std::move(buf_node));
         } else {
-            result.assign(it_begin, it_end);
+            if constexpr (is_unique_ptr<Handle>::value) {
+                result.assign(std::make_move_iterator(it_begin), std::make_move_iterator(it_end));
+            } else {
+                result.assign(it_begin, it_end);
+            }
+            buffer_.erase(buffer_.begin(), it_end);
         }
-        buffer_.erase(buffer_.begin(), it_end);
+
         spin_lock_.release();
         return result;
     }

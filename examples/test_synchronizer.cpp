@@ -2,8 +2,6 @@
 #include <iomanip>
 #include <iostream>
 #include <memory>
-#include <thread>
-#include <tuple>
 #include <vector>
 
 #include <Eigen/Core>
@@ -30,6 +28,21 @@ struct IMUMeasurement {
     double get_timestamp() const { return timestamp; }
 };
 
+void IMUInterpolate(void* src, void* dst, void* out) {
+    auto* p0 = static_cast<IMUMeasurement*>(src);
+    auto* p1 = static_cast<IMUMeasurement*>(dst);
+    auto* p_out = static_cast<IMUMeasurement*>(out);
+
+    double t0 = p0->timestamp;
+    double t1 = p1->timestamp;
+    double t_target = p_out->timestamp;
+
+    double alpha = (t_target - t0) / (t1 - t0);
+
+    p_out->acc = p0->acc + alpha * (p1->acc - p0->acc);
+    p_out->gyro = p0->gyro + alpha * (p1->gyro - p0->gyro);
+}
+
 using ImageBuf = DataBuffer<CameraFrame, SensorType::Camera, SharedPtrStorage>;
 using IMUBuf = DataBuffer<IMUMeasurement, SensorType::IMU, ValueStorage>;
 
@@ -38,6 +51,7 @@ int main() {
     auto left_buffer = new ImageBuf(10);
     auto right_buffer = new ImageBuf(10);
     auto imu_buffer = new IMUBuf(500);
+    imu_buffer->set_interpolate(IMUInterpolate);
 
     using SyncType = Synchronizer<ImageBuf, ImageBuf, ImageBuf, IMUBuf>;
     SyncType sync(rgb_buffer, left_buffer, right_buffer, imu_buffer);

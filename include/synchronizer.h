@@ -1,6 +1,7 @@
 #ifndef SYNCHRONIZER_H_
 #define SYNCHRONIZER_H_
 
+// cpp
 #include <poll.h>
 #include <unistd.h>
 #include <deque>
@@ -77,6 +78,8 @@ public:
         }
     }
 
+    void set_dt_tolerance(double dt_tolerance) { dt_tolerance_ = dt_tolerance; }
+
     bool pop_package(DataPackage& out) {
         std::lock_guard<std::mutex> lock(queue_mutex_);
         if (data_queue_.empty()) {
@@ -104,6 +107,8 @@ private:
     std::mutex queue_mutex_;
 
     double prev_timestamp_ = -1.0;
+
+    double dt_tolerance_ = 0.005;
 
     void align_loop() {
         int efd = trigger_->get_eventfd();
@@ -160,7 +165,7 @@ private:
                         prev_timestamp_ = current_ts;
                         pending_num = 0;
                     } else {
-                        if (pending_num < 4) {
+                        if (pending_num < 2) {
                             pending_num++;
                             break;
                         } else {
@@ -198,7 +203,7 @@ private:
                     result =
                         std::move(*static_cast<typename buffer_traits<BufType>::HandleType*>(item));
                 },
-                current_ts, 0.005);
+                current_ts, dt_tolerance_);
         }
 
         return result;
@@ -212,7 +217,7 @@ private:
         if constexpr (s_type == data::SensorType::IMU) {
             return buf->query_by_time_range(prev_ts, current_ts);
         } else {
-            return buf->query_by_time_window(current_ts, 0.005);
+            return buf->query_by_time_window(current_ts, dt_tolerance_);
         }
     }
 };

@@ -11,6 +11,7 @@ add_library(SyncTrigger::SyncTrigger ALIAS SyncTrigger)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 target_include_directories(
   SyncTrigger INTERFACE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
