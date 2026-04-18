@@ -2,14 +2,18 @@
 #define BUFFER_H_
 
 // cpp
+#include <sys/eventfd.h>
+#include <unistd.h>
 #include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
+#include <iostream>
 #include <memory>
 #include <optional>
 #include <vector>
 
-#include "buffer_base.h"
+#include "sensorType.h"
 #include "spinLock.h"
 #include "storagePolicy.h"
 
@@ -22,75 +26,71 @@ concept ValidMessage = requires(Message msg, double ts) {
 };
 
 template <
-    ValidMessage Message, typename StoragePolicy,
+    ValidMessage Message, SensorType Type, typename StoragePolicy,
     BufferStrategy Strategy = BufferStrategy::FixedSize>
 
-class Buffer : public BufferBase {
+class Buffer {
 public:
     using Handle = typename StoragePolicy::template Handle<Message>;
 
     using Interpolator = std::function<Handle(const Handle&, const Handle&, const double)>;
 
-    explicit Buffer(const size_t capacity) : capacity_(capacity) {
-        flag_ = AtomicFlagFactory::create();
-        buffer_.reserve(capacity_);
+    using SharedPtr = std::shared_ptr<Buffer<Message, Type, StoragePolicy, Strategy>>;
+
+    using UniquePtr = std::unique_ptr<Buffer<Message, Type, StoragePolicy, Strategy>>;
+
+    static UniquePtr createUnique(size_t capacity) {
+        return std::unique_ptr<Buffer>(new Buffer(capacity));
     }
 
-    Buffer(Buffer& other) {
-        SharedSpinLock lock(other.flag_);
-        this->flag_ = AtomicFlagFactory::create();
-        if constexpr (is_unique_ptr<Handle>::value) {
-            buffer_ = std::move(other.buffer_);
-        } else {
-            buffer_ = other.buffer_;
-        }
-        capacity_ = other.capacity_;
+    static SharedPtr createShared(size_t capacity) {
+        return std::shared_ptr<Buffer>(new Buffer(capacity));
     }
 
     void set_interpolator(Interpolator interpolator) { interpolator_ = interpolator; }
 
-    size_t size() override {
+    size_t size() {
         SharedSpinLock lock(flag_);
         return buffer_.size();
     }
 
-    bool empty() override {
+    bool empty() {
         SharedSpinLock lock(flag_);
         return buffer_.empty();
     }
 
-    void clear() override {
+    void clear() {
         SharedSpinLock lock(flag_);
         buffer_.clear();
     }
 
-    void pop_front() override {
+    void pop_front() {
         SharedSpinLock lock(flag_);
         if (!buffer_.empty()) {
             buffer_.erase(buffer_.begin());
         }
     }
 
-    void pop_back() override {
+    void pop_back() {
         SharedSpinLock lock(flag_);
         if (!buffer_.empty()) {
             buffer_.pop_back();
         }
     }
 
-    bool isPresent(const double ts, const double tolerance) override {
+    bool isPresent(const double ts) {
         SharedSpinLock lock(flag_);
         if (buffer_.empty()) {
             return false;
         }
 
-        return (get_timestamp(buffer_.back()) <= (ts + tolerance) &&
-                get_timestamp(buffer_.back()) >= (ts - tolerance)) ||
-               (get_timestamp(buffer_.front()) <= (ts + tolerance) &&
-                get_timestamp(buffer_.front()) >= (ts - tolerance));
+        return (get_timestamp(buffer_.back()) <= (ts + dt_tolerance_) &&
+                get_timestamp(buffer_.back()) >= (ts - dt_tolerance_)) ||
+               (get_timestamp(buffer_.front()) <= (ts + dt_tolerance_) &&
+                get_timestamp(buffer_.front()) >= (ts - dt_tolerance_));
     }
 
-    bool isSliceAvailable(const double ts_begin, const double ts_end) override {
+    bool isSliceAvailable(const double ts_begin, const double ts_end) {
         SharedSpinLock lock(flag_);
         if (buffer_.empty()) {
             return false;
@@ -108,7 +108,7 @@ public:
         return flag;
     }
 
-    double get_oldest_timestamp() override {
+    double get_oldest_timestamp() {
         SharedSpinLock lock(flag_);
         if (!buffer_.empty()) {
             return get_timestamp(buffer_.front());
@@ -116,7 +116,7 @@ public:
         return -1.0;
     }
 
-    double get_newest_timestamp() override {
+    double get_newest_timestamp() {
         SharedSpinLock lock(flag_);
         if (!buffer_.empty()) {
             return get_timestamp(buffer_.back());
@@ -180,17 +180,17 @@ public:
         return std::vector<Handle>();
     }
 
-    std::optional<Handle> fetchNearest(const double ts, const double tolerance) {
+    std::optional<Handle> fetchNearest(const double ts) {
         SharedSpinLock lock(flag_);
         if (buffer_.empty()) {
             return std::nullopt;
         }
 
         auto it_begin = std::lower_bound(
-            buffer_.begin(), buffer_.end(), ts - tolerance,
+            buffer_.begin(), buffer_.end(), ts - dt_tolerance_,
             [](const Handle& h, double ts) { return get_timestamp(h) <= ts; });
         auto it_end = std::upper_bound(
-            buffer_.begin(), buffer_.end(), ts + tolerance,
+            buffer_.begin(), buffer_.end(), ts + dt_tolerance_,
             [](double ts, const Handle& h) { return ts <= get_timestamp(h); });
         if (it_begin == it_end) {
             return std::nullopt;
@@ -242,8 +242,43 @@ public:
         }
     }
 
+    void set_tolerance(const double tolerance) {
+        SharedSpinLock lock(flag_);
+        dt_tolerance_ = tolerance;
+    }
+
+    void register_as_trigger() {
+        if (efd_ >= 0) {
+            close(efd_);
+            efd_ = -1;
+        }
+
+        efd_ = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+
+        if (efd_ < 0) {
+            throw std::runtime_error("Failed to create eventfd");
+            trigger_flag_ = false;
+            return;
+        }
+
+        trigger_flag_ = true;
+        std::cout << "Successfully to register as trigger" << std::endl;
+    }
+
+    int get_eventfd() const { return efd_; }
+
 private:
     Buffer() = delete;
+
+    Buffer(const size_t capacity)
+        : capacity_(capacity), dt_tolerance_(0.005), trigger_flag_(false) {
+        flag_ = AtomicFlagFactory::create();
+        buffer_.reserve(capacity_);
+    }
+
+    Buffer(Buffer&) = delete;
+
+    Buffer(const Buffer&) = delete;
 
     inline static double get_timestamp(const Handle& handle) {
         if constexpr (is_unique_ptr<Handle>::value || is_shared_ptr<Handle>::value) {
@@ -260,6 +295,12 @@ private:
     Interpolator interpolator_;
 
     std::shared_ptr<std::atomic<bool>> flag_;
+
+    double dt_tolerance_;
+
+    bool trigger_flag_;
+
+    int efd_ = -1;
 };
 }  // namespace ts
 

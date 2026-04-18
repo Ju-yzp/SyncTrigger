@@ -18,8 +18,7 @@ target_include_directories(
                         $<INSTALL_INTERFACE:include>)
 
 option(SYNCTRIGGER_BUILD_TESTS "Build unit tests using GTest" ON)
-
-option(SYNCTRIGGER_BUILD_EXAMPLES "Build example applications" OFF)
+option(SYNCTRIGGER_BUILD_EXAMPLES "Build example applications" ON)
 
 if(SYNCTRIGGER_BUILD_TESTS)
   enable_testing()
@@ -27,7 +26,16 @@ if(SYNCTRIGGER_BUILD_TESTS)
 endif()
 
 if(SYNCTRIGGER_BUILD_EXAMPLES)
+  find_package(OpenCV REQUIRED)
+  find_package(Eigen3 REQUIRED)
+  find_package(depthai CONFIG REQUIRED)
+  find_package(Threads REQUIRED)
 
+  add_executable(camera_imu_sync examples/camera_imu_sync.cpp)
+
+  target_link_libraries(
+    camera_imu_sync PRIVATE SyncTrigger::SyncTrigger Eigen3::Eigen
+                            depthai::core ${OpenCV_LIBS} Threads::Threads)
 endif()
 
 include(CMakePackageConfigHelpers)
