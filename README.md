@@ -6,6 +6,7 @@ SyncTrigger is a header-only template library that supports all types of sensors
 
 <img src="./docs/demo.gif" width="600" alt="demo">
 
+<img src="./docs/plot.png" width="600" alt="plot">
 
 ## Quick Start
 
@@ -17,7 +18,7 @@ cmake ..
 make -j$(nproc)
 
 sudo make install
-# test(optional)
+# test(optional)https://github.com/hudson-trading/corral.git
 ctest
 
 ```
@@ -30,6 +31,8 @@ ctest
 * **🛠 Universal Compatibility**: Supports an arbitrary number of sensors and diverse data types through C++20 variadic templates, ensuring flexibility for complex multi-modal systems.
 
 * **🚀 Efficient Event Notification**: Leverages Linux-native `poll` and `eventfd` mechanisms for non-blocking, low-latency event notification, eliminating CPU-heavy busy-waiting.
+
+* **📊 Statistics**: Provides comprehensive statistics on synchronization performance, including sensor data arrival jitter at the host.
 
 ## Future Roadmap
 

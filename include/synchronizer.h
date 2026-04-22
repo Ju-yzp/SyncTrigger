@@ -77,7 +77,6 @@ private:
                 }
 
                 if (all_ready) {
-                    std::cout << "Fill package successful: Data not aligned." << std::endl;
                     DataPackage package;
                     if (fill_package(package, current_ts)) {
                         std::lock_guard<std::mutex> lock(queue_mutex_);
@@ -88,8 +87,7 @@ private:
                     prev_ts_ = current_ts;
                     pending_num_ = 0;
                 } else {
-                    std::cout << "Fill package failed: Data not aligned." << std::endl;
-                    if (pending_num_ < 2) {
+                    if (pending_num_ < 8) {
                         pending_num_++;
                         break;
                     } else {

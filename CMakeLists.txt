@@ -19,6 +19,7 @@ target_include_directories(
 
 option(SYNCTRIGGER_BUILD_TESTS "Build unit tests using GTest" ON)
 option(SYNCTRIGGER_BUILD_EXAMPLES "Build example applications" ON)
+option(SYNCTRIGGER_BUILD_TOOLS "Build tools as shared library" ON)
 
 if(SYNCTRIGGER_BUILD_TESTS)
   enable_testing()
@@ -33,9 +34,41 @@ if(SYNCTRIGGER_BUILD_EXAMPLES)
 
   add_executable(camera_imu_sync examples/camera_imu_sync.cpp)
 
+  target_compile_definitions(camera_imu_sync PRIVATE ENABLE_ANALYZE)
+
   target_link_libraries(
-    camera_imu_sync PRIVATE SyncTrigger::SyncTrigger Eigen3::Eigen
-                            depthai::core ${OpenCV_LIBS} Threads::Threads)
+    camera_imu_sync
+    PRIVATE SyncTrigger::SyncTrigger SyncTrigger::tools Eigen3::Eigen
+            depthai::core ${OpenCV_LIBS} Threads::Threads)
+endif()
+
+if(SYNCTRIGGER_BUILD_TOOLS)
+  # 查找curses库
+  find_package(Curses REQUIRED)
+
+  # 创建tools动态共享库
+  add_library(tools SHARED src/statistical_analyzer.cpp)
+
+  # 设置tools库的属性
+  target_include_directories(
+    tools PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+                 $<INSTALL_INTERFACE:include>)
+
+  # 链接curses库
+  target_link_libraries(tools PUBLIC ${OpenCV_LIBS})
+
+  # 创建别名
+  add_library(SyncTrigger::tools ALIAS tools)
+
+  # 安装tools库
+  install(
+    TARGETS tools
+    EXPORT SyncTriggerTargets
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    INCLUDES
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 endif()
 
 include(CMakePackageConfigHelpers)

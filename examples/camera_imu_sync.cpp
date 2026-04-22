@@ -2,6 +2,7 @@
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <opencv2/core/types.hpp>
 #include <vector>
 
 #include <Eigen/Core>
@@ -10,24 +11,33 @@
 
 #include "buffer.h"
 #include "synchronizer.h"
+#ifdef ENABLE_ANALYZE
+#include "statistical_analyzer.h"
+#endif
 
 using namespace ts;
 
 struct CameraFrame {
     double timestamp;
+    double host_timestamp;
     uint32_t seq;
     cv::Mat image;
     double exposure_time;
     double get_timestamp() const { return timestamp; }
     void set_timestamp(double ts) { timestamp = ts; }
+    double get_device_timestamp() const { return timestamp; }
+    double get_host_timestamp() const { return host_timestamp; }
 };
 
 struct IMUMeasurement {
     double timestamp;
+    double host_timestamp;
     Eigen::Vector3d acc;
     Eigen::Vector3d gyro;
     double get_timestamp() const { return timestamp; }
     void set_timestamp(double ts) { timestamp = ts; }
+    double get_device_timestamp() const { return timestamp; }
+    double get_host_timestamp() const { return host_timestamp; }
 };
 
 using ImageHandle = std::shared_ptr<CameraFrame>;
@@ -39,6 +49,8 @@ IMUHandle IMUInterpolator(const IMUHandle& p0, const IMUHandle& p1, double t_tar
     double alpha = (t_target - p0.timestamp) / (p1.timestamp - p0.timestamp);
     out.acc = p0.acc + alpha * (p1.acc - p0.acc);
     out.gyro = p0.gyro + alpha * (p1.gyro - p0.gyro);
+    // 插值主机时间戳
+    out.host_timestamp = p0.host_timestamp + alpha * (p1.host_timestamp - p0.host_timestamp);
     return out;
 }
 
@@ -55,8 +67,18 @@ int main() {
 
     imu_buffer->set_interpolator(IMUInterpolator);
 
+#ifdef ENABLE_ANALYZE
+    // 创建独立的统计器
+    auto analyzer = std::make_unique<ts::StatisticalAnalyzer>(500, 900, 50);
+    // 将传感器与统计器关联
+    analyzer->add_sensor(0, "RGB Camera", cv::Scalar(0, 255, 0));
+    analyzer->add_sensor(1, "Left Camera", cv::Scalar(0, 0, 255));
+    analyzer->add_sensor(2, "Right Camera", cv::Scalar(255, 0, 0));
+    analyzer->add_sensor(3, "IMU", cv::Scalar(0, 255, 255));
+#endif
+
     using SyncType = Synchronizer<RGBBuf, LeftBuf, RightBuf, IMUBuf>;
-    SyncType sync(0, rgb_buffer.get(), left_buffer.get(), right_buffer.get(), imu_buffer.get());
+    SyncType sync(2, rgb_buffer.get(), left_buffer.get(), right_buffer.get(), imu_buffer.get());
 
     dai::Pipeline pipeline;
 
@@ -100,16 +122,26 @@ int main() {
 
     auto qLeft = device.getOutputQueue("left", 8, false);
     auto qRight = device.getOutputQueue("right", 8, false);
-    auto qImu = device.getOutputQueue("imu", 50, false);
+    auto qImu = device.getOutputQueue("imu", 150, false);
     auto qRgb = device.getOutputQueue("rgb", 8, false);
 
-    auto process_img = [&](std::shared_ptr<dai::ImgFrame> daiFrame, auto& buf, bool isRgb) {
+    auto process_img = [&](std::shared_ptr<dai::ImgFrame> daiFrame, auto& buf, bool isRgb,
+                           size_t sensor_id) {
         if (!daiFrame) return;
 
         auto frame = std::make_shared<CameraFrame>();
         frame->timestamp = daiFrame->getTimestamp().time_since_epoch().count() / 1e9;
+        frame->host_timestamp = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                    std::chrono::steady_clock::now().time_since_epoch())
+                                    .count() /
+                                1e9;
         frame->seq = daiFrame->getSequenceNum();
         frame->exposure_time = static_cast<double>(daiFrame->getExposureTime().count());
+
+#ifdef ENABLE_ANALYZE
+        // 向统计器添加主机时间戳
+        analyzer->add_timestamp(sensor_id, frame->host_timestamp);
+#endif
 
         if (isRgb) {
             int w = daiFrame->getWidth();
@@ -126,25 +158,35 @@ int main() {
     };
 
     qRgb->addCallback([&](std::shared_ptr<dai::ADatatype> data) {
-        process_img(std::static_pointer_cast<dai::ImgFrame>(data), rgb_buffer, true);
+        process_img(std::static_pointer_cast<dai::ImgFrame>(data), rgb_buffer, true, 0);
     });
 
     qLeft->addCallback([&](std::shared_ptr<dai::ADatatype> data) {
-        process_img(std::static_pointer_cast<dai::ImgFrame>(data), left_buffer, false);
+        process_img(std::static_pointer_cast<dai::ImgFrame>(data), left_buffer, false, 1);
     });
 
     qRight->addCallback([&](std::shared_ptr<dai::ADatatype> data) {
-        process_img(std::static_pointer_cast<dai::ImgFrame>(data), right_buffer, false);
+        process_img(std::static_pointer_cast<dai::ImgFrame>(data), right_buffer, false, 2);
     });
 
     qImu->addCallback([&](std::shared_ptr<dai::ADatatype> data) {
         auto imuData = std::static_pointer_cast<dai::IMUData>(data);
+        auto host_time = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                             std::chrono::steady_clock::now().time_since_epoch())
+                             .count() /
+                         1e9;
         for (auto& packet : imuData->packets) {
             IMUMeasurement m;
             m.timestamp = packet.acceleroMeter.timestamp.get().time_since_epoch().count() / 1e9;
+            m.host_timestamp = host_time;
             m.acc << packet.acceleroMeter.x, packet.acceleroMeter.y, packet.acceleroMeter.z;
             m.gyro << packet.gyroscope.x, packet.gyroscope.y, packet.gyroscope.z;
             imu_buffer->push_back(m);
+
+#ifdef ENABLE_ANALYZE
+            // 向统计器添加主机时间戳
+            analyzer->add_timestamp(3, m.host_timestamp);
+#endif
         }
     });
 

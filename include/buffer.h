@@ -15,6 +15,7 @@
 
 #include "sensorType.h"
 #include "spinLock.h"
+#include "statistical_analyzer.h"
 #include "storagePolicy.h"
 
 namespace ts {
@@ -23,6 +24,9 @@ template <typename Message>
 concept ValidMessage = requires(Message msg, double ts) {
     { msg.get_timestamp() } -> std::convertible_to<double>;
     { msg.set_timestamp(ts) } -> std::same_as<void>;
+#ifdef ENABLE_ANALYZER
+    { msg.get_host_timestamp() } -> std::convertible_to<double>;
+#endif
 };
 
 template <
@@ -84,10 +88,14 @@ public:
             return false;
         }
 
-        return (get_timestamp(buffer_.back()) <= (ts + dt_tolerance_) &&
-                get_timestamp(buffer_.back()) >= (ts - dt_tolerance_)) ||
-               (get_timestamp(buffer_.front()) <= (ts + dt_tolerance_) &&
-                get_timestamp(buffer_.front()) >= (ts - dt_tolerance_));
+        auto it_begin = std::lower_bound(
+            buffer_.begin(), buffer_.end(), ts - dt_tolerance_,
+            [](const Handle& h, double ts) { return get_timestamp(h) <= ts; });
+        auto it_end = std::upper_bound(
+            buffer_.begin(), buffer_.end(), ts + dt_tolerance_,
+            [](double ts, const Handle& h) { return ts <= get_timestamp(h); });
+
+        return it_begin != buffer_.end() || it_end != buffer_.end();
     }
 
     bool isSliceAvailable(const double ts_begin, const double ts_end) {
@@ -224,6 +232,13 @@ public:
         if (!buffer_.empty() && get_timestamp(value) <= get_timestamp(buffer_.back())) {
             return;
         }
+#ifdef ENABLE_ANALYZER
+
+        if (analyzer_) {
+            analyzer_->add_timestamp(id, get_host_timestamp(value));
+        }
+#endif
+
         if (Strategy != BufferStrategy::Dynamic) {
             if (buffer_.size() >= capacity_) {
                 buffer_.erase(buffer_.begin());
@@ -267,6 +282,14 @@ public:
 
     int get_eventfd() const { return efd_; }
 
+    void set_sensor_name(const std::string& name) { sensor_name_ = name; }
+
+    std::string get_sensor_name() const { return sensor_name_; }
+
+    void set_sensor_id(size_t id) { this->id = id; }
+
+    size_t get_sensor_id() const { return id; }
+
 private:
     Buffer() = delete;
 
@@ -288,6 +311,15 @@ private:
         }
     }
 
+#ifdef ENABLE_ANALYZER
+    inline static double get_host_timestamp(const Handle& handle) {
+        if constexpr (is_unique_ptr<Handle>::value || is_shared_ptr<Handle>::value) {
+            return handle->get_host_timestamp();
+        } else {
+            return handle.get_host_timestamp();
+        }
+    }
+#endif
     size_t capacity_;
 
     std::vector<Handle> buffer_;
@@ -301,6 +333,12 @@ private:
     bool trigger_flag_;
 
     int efd_ = -1;
+
+    std::string sensor_name_;
+
+    StatisticalAnalyzer* analyzer_;
+
+    size_t id;
 };
 }  // namespace ts
 
