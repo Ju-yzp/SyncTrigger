@@ -90,12 +90,12 @@ public:
 
         auto it_begin = std::lower_bound(
             buffer_.begin(), buffer_.end(), ts - dt_tolerance_,
-            [](const Handle& h, double ts) { return get_timestamp(h) <= ts; });
+            [](const Handle& h, double ts) { return get_timestamp(h) < ts; });
         auto it_end = std::upper_bound(
             buffer_.begin(), buffer_.end(), ts + dt_tolerance_,
-            [](double ts, const Handle& h) { return ts <= get_timestamp(h); });
+            [](double ts, const Handle& h) { return ts < get_timestamp(h); });
 
-        return it_begin != buffer_.end() || it_end != buffer_.end();
+        return it_begin != it_end;
     }
 
     bool isSliceAvailable(const double ts_begin, const double ts_end) {
@@ -196,10 +196,10 @@ public:
 
         auto it_begin = std::lower_bound(
             buffer_.begin(), buffer_.end(), ts - dt_tolerance_,
-            [](const Handle& h, double ts) { return get_timestamp(h) <= ts; });
+            [](const Handle& h, double ts) { return get_timestamp(h) < ts; });
         auto it_end = std::upper_bound(
             buffer_.begin(), buffer_.end(), ts + dt_tolerance_,
-            [](double ts, const Handle& h) { return ts <= get_timestamp(h); });
+            [](double ts, const Handle& h) { return ts < get_timestamp(h); });
         if (it_begin == it_end) {
             return std::nullopt;
         }
@@ -228,6 +228,12 @@ public:
 
     void push_back(Handle value) {
         SharedSpinLock lock(flag_);
+
+        if constexpr (is_unique_ptr<Handle>::value || is_shared_ptr<Handle>::value) {
+            if (!value) {
+                return;
+            }
+        }
 
         if (!buffer_.empty() && get_timestamp(value) <= get_timestamp(buffer_.back())) {
             return;

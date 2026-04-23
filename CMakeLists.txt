@@ -43,24 +43,16 @@ if(SYNCTRIGGER_BUILD_EXAMPLES)
 endif()
 
 if(SYNCTRIGGER_BUILD_TOOLS)
-  # 查找curses库
-  find_package(Curses REQUIRED)
-
-  # 创建tools动态共享库
   add_library(tools SHARED src/statistical_analyzer.cpp)
 
-  # 设置tools库的属性
   target_include_directories(
     tools PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
                  $<INSTALL_INTERFACE:include>)
 
-  # 链接curses库
   target_link_libraries(tools PUBLIC ${OpenCV_LIBS})
 
-  # 创建别名
   add_library(SyncTrigger::tools ALIAS tools)
 
-  # 安装tools库
   install(
     TARGETS tools
     EXPORT SyncTriggerTargets

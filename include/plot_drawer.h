@@ -4,6 +4,7 @@
 #include <cassert>
 #include <cstddef>
 #include <map>
+#include <opencv2/core/types.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/opencv.hpp>
 #include <string>
@@ -15,31 +16,33 @@ public:
     PlotDrawer(size_t height, size_t width, size_t interval = 30)
         : height_(height), width_(width), interval_(interval), cache_size_(width_ / interval_) {
         assert(height_ > 0 && width_ > 0 && cache_size_ > 0 && interval_ > 0);
+        img_ = cv::Mat(height_, width_, CV_8UC3, cv::Scalar(60, 60, 60));
     };
 
     cv::Mat draw() {
-        cv::Mat img(height_, width_, CV_8UC3, cv::Scalar(100, 100, 100));
+        img_.setTo(cv::Scalar(60, 60, 60));
         float lable_y = 30;
         float lable_dy = 30;
         for (auto& [name, pts] : points_map_) {
             int text_width = name.length() * 10;
             cv::putText(
-                img, name, cv::Point2f(width_ - text_width - 10, lable_y), cv::FONT_HERSHEY_SIMPLEX,
-                0.5, colors_[name], 1);
+                img_, name, cv::Point2f(width_ - text_width - 10, lable_y),
+                cv::FONT_HERSHEY_SIMPLEX, 0.5, colors_[name], 1);
             if (pts.size() > 1) {
                 for (size_t i = 1; i < pts.size(); ++i) {
-                    cv::line(img, pts[i - 1], pts[i], colors_[name], 1, cv::LINE_AA);
+                    cv::line(img_, pts[i - 1], pts[i], colors_[name], 1, cv::LINE_AA);
                 }
             }
             lable_y += lable_dy;
         }
-        for (size_t i = 0; i < height_; i += 80) {
-            std::string label = std::to_string(i);
+        for (int i = height_; i > 0; i -= 80) {
+            cv::line(img_, cv::Point2f(0, i), cv::Point2f(width_, i), cv::Scalar(255, 255, 255), 1);
+            std::string label = std::to_string(height_ - i);
             cv::putText(
-                img, label, cv::Point2f(0, height_ - i), cv::FONT_HERSHEY_SIMPLEX, 0.5,
+                img_, label, cv::Point2f(0, i), cv::FONT_HERSHEY_SIMPLEX, 0.5,
                 cv::Scalar(255, 255, 255), 1);
         }
-        return img;
+        return img_;
     }
 
     void set_interval(int interval) { interval_ = interval; }
@@ -73,6 +76,7 @@ private:
     size_t height_, width_;
     size_t interval_;
     size_t cache_size_;
+    cv::Mat img_;
 };
 }  // namespace ts
 #endif

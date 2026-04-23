@@ -49,7 +49,6 @@ IMUHandle IMUInterpolator(const IMUHandle& p0, const IMUHandle& p1, double t_tar
     double alpha = (t_target - p0.timestamp) / (p1.timestamp - p0.timestamp);
     out.acc = p0.acc + alpha * (p1.acc - p0.acc);
     out.gyro = p0.gyro + alpha * (p1.gyro - p0.gyro);
-    // 插值主机时间戳
     out.host_timestamp = p0.host_timestamp + alpha * (p1.host_timestamp - p0.host_timestamp);
     return out;
 }
@@ -68,9 +67,7 @@ int main() {
     imu_buffer->set_interpolator(IMUInterpolator);
 
 #ifdef ENABLE_ANALYZE
-    // 创建独立的统计器
     auto analyzer = std::make_unique<ts::StatisticalAnalyzer>(500, 900, 50);
-    // 将传感器与统计器关联
     analyzer->add_sensor(0, "RGB Camera", cv::Scalar(0, 255, 0));
     analyzer->add_sensor(1, "Left Camera", cv::Scalar(0, 0, 255));
     analyzer->add_sensor(2, "Right Camera", cv::Scalar(255, 0, 0));
@@ -90,8 +87,8 @@ int main() {
     monoRight->setCamera("right");
     monoLeft->setResolution(dai::MonoCameraProperties::SensorResolution::THE_480_P);
     monoRight->setResolution(dai::MonoCameraProperties::SensorResolution::THE_480_P);
-    monoLeft->setFps(30);
-    monoRight->setFps(30);
+    monoLeft->setFps(80);
+    monoRight->setFps(50);
 
     colorCam->setBoardSocket(dai::CameraBoardSocket::CAM_A);
     colorCam->setResolution(dai::ColorCameraProperties::SensorResolution::THE_1080_P);
@@ -122,7 +119,7 @@ int main() {
 
     auto qLeft = device.getOutputQueue("left", 8, false);
     auto qRight = device.getOutputQueue("right", 8, false);
-    auto qImu = device.getOutputQueue("imu", 150, false);
+    auto qImu = device.getOutputQueue("imu", 60, false);
     auto qRgb = device.getOutputQueue("rgb", 8, false);
 
     auto process_img = [&](std::shared_ptr<dai::ImgFrame> daiFrame, auto& buf, bool isRgb,
@@ -139,7 +136,6 @@ int main() {
         frame->exposure_time = static_cast<double>(daiFrame->getExposureTime().count());
 
 #ifdef ENABLE_ANALYZE
-        // 向统计器添加主机时间戳
         analyzer->add_timestamp(sensor_id, frame->host_timestamp);
 #endif
 

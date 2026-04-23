@@ -4,9 +4,7 @@ SyncTrigger is a header-only template library that supports all types of sensors
 
 ---
 
-<img src="./docs/demo.gif" width="600" alt="demo">
-
-<img src="./docs/plot.png" width="600" alt="plot">
+<img src="./docs/sync_demo.gif" width="600" alt="demo">
 
 ## Quick Start
 
@@ -37,5 +35,3 @@ ctest
 ## Future Roadmap
 
 * **🛡️ Enhanced Robustness**: Improve system resilience against real-world challenges, such as handling significant data jitter (arrival timing variance) and implementing automatic recovery for sensor disconnection.
-
-* **📊 Performance Statistics**: Support detailed telemetry and diagnostic output, including real-time tracking of key metrics such as packet loss rate, synchronization latency, and buffer pressure.
