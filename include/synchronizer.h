@@ -4,81 +4,42 @@
 // cpp
 #include <poll.h>
 #include <unistd.h>
+#include <cstddef>
 #include <deque>
 #include <stdexcept>
 #include <thread>
 
-#include "dataBuffer.h"
-#include "dataBuffer_base.h"
-#include "storagePolicy.h"
+#include "bufferManager.h"
+#include "buffer_traits.h"
 
-namespace data {
-template <typename T>
-struct buffer_traits;
+namespace ts {
 
-template <typename Msg, data::SensorType ST, typename SP, data::BufferStrategy BS>
-struct buffer_traits<data::DataBuffer<Msg, ST, SP, BS>> {
-    using HandleType = typename SP::template Handle<Msg>;
-    static constexpr data::SensorType sensor_type = ST;
-
-    using StorageType =
-        std::conditional_t<ST == data::SensorType::IMU, std::vector<HandleType>, HandleType>;
-};
-
-template <typename... BufferTypes>
-struct DataPacket {
-    using TupleType = std::tuple<typename buffer_traits<BufferTypes>::StorageType...>;
-    TupleType data;
-
-    template <std::size_t I>
-    auto& get() {
-        return std::get<I>(data);
-    }
-};
-
-template <typename T>
-struct is_data_buffer : std::false_type {};
-
-template <
-    typename Message, data::SensorType Type, typename StoragePolicy, data::BufferStrategy Strategy>
-struct is_data_buffer<data::DataBuffer<Message, Type, StoragePolicy, Strategy>> : std::true_type {};
-
-template <typename Trigger, typename... Buffers>
+template <typename... Buffers>
 class Synchronizer {
 public:
-    static_assert(is_data_buffer<Trigger>::value, "Trigger must be a specialization of DataBuffer");
-
     static_assert(
-        (is_data_buffer<Buffers>::value && ...),
-        "All Buffers must be specializations of DataBuffer");
+        (is_data_buffer<Buffers>::value && ...), "All types must be DataBuffer specializations");
 
-    using DataPackage = DataPacket<Trigger, Buffers...>;
+    using DataPackage = DataPacket<Buffers...>;
 
-    Synchronizer(Trigger* trigger, Buffers*... buffers)
-        : all_buffers_(std::make_tuple(trigger, buffers...)),
-          trigger_(trigger),
-          terminated_(false),
-          prev_timestamp_(-1.0) {
-        if (!trigger_) throw std::invalid_argument("Trigger cannot be null");
+    explicit Synchronizer(size_t trigger_id, Buffers*... buffers)
+        : trigger_id_(trigger_id), terminated_(false), prev_ts_(-1.0), btm_(buffers...) {
+        if (trigger_id_ >= btm_.size()) {
+            throw std::invalid_argument("Trigger ID out of range");
+        }
 
-        trigger_->register_as_trigger();
-        align_thread_ = std::thread(&Synchronizer::align_loop, this);
+        btm_.execute(trigger_id_, [](auto* buf) { buf->register_as_trigger(); });
+
+        sync_thread_ = std::thread(&Synchronizer::sync_loop, this);
     }
 
     ~Synchronizer() {
         terminated_ = true;
+        uint64_t signal = 1;
+        write(btm_.get_fd(trigger_id_), &signal, sizeof(signal));
 
-        if (trigger_) {
-            uint64_t signal = 1;
-            write(trigger_->get_eventfd(), &signal, sizeof(signal));
-        }
-
-        if (align_thread_.joinable()) {
-            align_thread_.join();
-        }
+        if (sync_thread_.joinable()) sync_thread_.join();
     }
-
-    void set_dt_tolerance(double dt_tolerance) { dt_tolerance_ = dt_tolerance; }
 
     bool pop_package(DataPackage& out) {
         std::lock_guard<std::mutex> lock(queue_mutex_);
@@ -92,135 +53,83 @@ public:
     }
 
 private:
-    std::tuple<Trigger*, Buffers*...> all_buffers_;
-
-    Trigger* trigger_ = nullptr;
-
-    std::thread align_thread_;
-
-    std::atomic<bool> terminated_;
-
-    std::deque<DataPackage> data_queue_;
-
-    int pending_num = 0;
-
-    std::mutex queue_mutex_;
-
-    double prev_timestamp_ = -1.0;
-
-    double dt_tolerance_ = 0.005;
-
-    void align_loop() {
-        int efd = trigger_->get_eventfd();
+    void sync_loop() {
+        int efd = btm_.get_fd(trigger_id_);
         struct pollfd pfd = {.fd = efd, .events = POLLIN};
 
         while (!terminated_) {
-            int ret = poll(&pfd, 1, 5);
+            int ret = poll(&pfd, 1, 10);
+            if (ret > 0 && (pfd.revents & POLLIN)) {
+                uint64_t count;
+                read(efd, &count, sizeof(count));
+            }
 
-            if (ret >= 0) {
-                if (ret > 0 && (pfd.revents & POLLIN)) {
-                    uint64_t count;
-                    read(efd, &count, sizeof(count));
+            while (!btm_.is_buffer_empty(trigger_id_)) {
+                double current_ts = btm_.get_oldest_ts(trigger_id_);
+                if (current_ts < 0.0) break;
+
+                bool all_ready = true;
+                for (size_t i = 0; i < btm_.size(); ++i) {
+                    if (!btm_.check_ready(i, current_ts, prev_ts_)) {
+                        all_ready = false;
+                        break;
+                    }
                 }
 
-                while (!trigger_->empty()) {
-                    double current_ts = trigger_->get_oldest_timestamp();
-                    if (current_ts < 0.0) break;
+                if (all_ready) {
+                    DataPackage package;
+                    if (fill_package(package, current_ts)) {
+                        std::lock_guard<std::mutex> lock(queue_mutex_);
+                        data_queue_.push_back(std::move(package));
+                    }
 
-                    bool is_all_ready = std::apply(
-                        [&](auto*... bufs) {
-                            return (
-                                this->check_data_ready(bufs, current_ts, prev_timestamp_) && ...);
-                        },
-                        all_buffers_);
-
-                    if (is_all_ready) {
-                        auto synced_results = std::apply(
-                            [&](auto*... bufs) {
-                                return std::make_tuple(
-                                    this->extract_data(bufs, current_ts, prev_timestamp_)...);
-                            },
-                            all_buffers_);
-
-                        DataPackage new_package;
-                        bool move_success = true;
-                        std::apply(
-                            [&](auto&... opts) {
-                                if ((opts.has_value() && ...)) {
-                                    new_package.data = std::make_tuple(std::move(opts.value())...);
-                                } else {
-                                    move_success = false;
-                                }
-                            },
-                            synced_results);
-
-                        if (move_success) {
-                            {
-                                std::lock_guard<std::mutex> lock(queue_mutex_);
-                                data_queue_.push_back(std::move(new_package));
-                            }
-                        }
-
-                        trigger_->pop_front();
-                        prev_timestamp_ = current_ts;
-                        pending_num = 0;
+                    btm_.pop_front(trigger_id_);
+                    prev_ts_ = current_ts;
+                    pending_num_ = 0;
+                } else {
+                    if (pending_num_ < 8) {
+                        pending_num_++;
+                        break;
                     } else {
-                        if (pending_num < 2) {
-                            pending_num++;
-                            break;
-                        } else {
-                            trigger_->pop_front();
-                        }
+                        btm_.pop_front(trigger_id_);
+                        pending_num_ = 0;
                     }
                 }
             }
         }
     }
 
-    template <typename BufferPtr>
-    auto extract_data(BufferPtr buf, double current_ts, double prev_ts) {
-        using BufType = typename std::remove_pointer_t<BufferPtr>;
-        constexpr auto s_type = buffer_traits<BufType>::sensor_type;
-        using StorageT = typename buffer_traits<BufType>::StorageType;
+    template <std::size_t... Is>
+    bool fill_helper(DataPackage& pkg, double current_ts, std::index_sequence<Is...>) {
+        return ([&]() -> bool {
+            std::any raw = btm_.fetch_data(Is, current_ts, prev_ts_);
+            if (!raw.has_value()) return false;
 
-        std::optional<StorageT> result = std::nullopt;
+            using TargetType =
+                typename std::tuple_element<Is, typename DataPackage::TupleType>::type;
 
-        if constexpr (s_type == data::SensorType::IMU) {
-            StorageT imu_data;
-            buf->get_data_set(
-                [&](void* item) {
-                    imu_data.push_back(std::move(
-                        *static_cast<typename buffer_traits<BufType>::HandleType*>(item)));
-                },
-                prev_ts, current_ts);
-
-            if (!imu_data.empty()) {
-                result = std::move(imu_data);
+            try {
+                std::get<Is>(pkg.data) = std::move(std::any_cast<TargetType&>(raw));
+            } catch (const std::bad_any_cast&) {
+                return false;
             }
-        } else {
-            buf->get_nearest_data(
-                [&](void* item) {
-                    result =
-                        std::move(*static_cast<typename buffer_traits<BufType>::HandleType*>(item));
-                },
-                current_ts, dt_tolerance_);
-        }
-
-        return result;
+            return true;
+        }() && ...);
     }
 
-    template <typename BufferPtr>
-    bool check_data_ready(BufferPtr buf, double current_ts, double prev_ts) {
-        using BufType = typename std::remove_pointer_t<BufferPtr>;
-        constexpr auto s_type = buffer_traits<BufType>::sensor_type;
-
-        if constexpr (s_type == data::SensorType::IMU) {
-            return buf->query_by_time_range(prev_ts, current_ts);
-        } else {
-            return buf->query_by_time_window(current_ts, dt_tolerance_);
-        }
+    bool fill_package(DataPackage& pkg, double current_ts) {
+        return fill_helper(pkg, current_ts, std::index_sequence_for<Buffers...>{});
     }
+
+    size_t trigger_id_;
+    BufferManager<Buffers...> btm_;
+    std::thread sync_thread_;
+    std::atomic<bool> terminated_;
+    double prev_ts_;
+    int pending_num_ = 0;
+    std::deque<DataPackage> data_queue_;
+    std::mutex queue_mutex_;
 };
-};  // namespace data
+}  // namespace ts
 
 #endif

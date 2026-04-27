@@ -1,43 +1,37 @@
 # SyncTrigger
 
-A lightweight, **header-only** C++ synchronization framework designed for multi-sensor systems (e.g., Camera, IMU, LiDAR). It ensures high-performance data alignment driven by a primary trigger sensor.
+SyncTrigger is a header-only template library that supports all types of sensors, provided that the data packages are defined according to the specified requirements..
 
 ---
 
-<img src="./docs/demo.gif" width="600" alt="demo">
+<img src="./docs/sync_demo.gif" width="600" alt="demo">
+
+## Quick Start
+
+```bash
+mkdir build && cd build
+
+cmake ..
+
+make -j$(nproc)
+
+sudo make install
+# test(optional)https://github.com/hudson-trading/corral.git
+ctest
+
+```
 
 ## Key Features
-* **⚡ Header-Only**: Zero compilation required. Integration is as simple as including a header file.
-* **🎯 Trigger-Based Alignment**: Uses the **Primary Sensor** as the master clock to drive data fusion across all auxiliary sensors.
-* **🔄 Smart Retry (Two-Strike Policy)**:
-    * **First Strike**: If auxiliary data is missing, the frame is buffered for one retry cycle.
-    * **Second Strike**: If sync fails again on the next signal, the stale frame is dropped to prevent pipeline stall and maintain liveness.
-* **🛠 Type-Safe & Flexible**: Leverages C++20 variadic templates to support an arbitrary number of sensors and data types.
-* **🚀 Real-Time Optimized**: Built for low-latency Linux environments using non-blocking I/O (`eventfd` and `poll`).
 
----
+* **🎯 Trigger-Driven Alignment**: The synchronization check is strictly driven by a primary sensor.
+    *(Recommended practice: Use the sensor with the lowest frequency as the trigger to minimize redundant processing).*
 
-## Design Logic
+* **🛠 Universal Compatibility**: Supports an arbitrary number of sensors and diverse data types through C++20 variadic templates, ensuring flexibility for complex multi-modal systems.
 
-The synchronizer operates as a deterministic state machine:
+* **🚀 Efficient Event Notification**: Leverages Linux-native `poll` and `eventfd` mechanisms for non-blocking, low-latency event notification, eliminating CPU-heavy busy-waiting.
 
-1.  **Poll**: Wait for the **Primary Sensor** (Trigger) to push new data.
-2.  **Check**: Verify if all auxiliary buffers contain data matching the Trigger's timestamp.
-3.  **Process or Defer**:
-    * **Ready**: Extract all synchronized data and dispatch a complete `DataPackage`.
-    * **Pending (1st fail)**: Hold the frame and wait for the next cycle.
-    * **Drop (2nd fail)**: Discard the stale trigger frame to ensure system throughput.
-
----
+* **📊 Statistics**: Provides comprehensive statistics on synchronization performance, including sensor data arrival jitter at the host.
 
 ## Future Roadmap
 
-* **Policy-Based Tuning**: Toggle between "Strict Sync" and "Best-Effort Interpolation."
-* **Lock-Free Optimization**: Minimizing mutex contention to further reduce jitter in high-frequency systems.
-
----
-
-## Requirements
-
-* **Standard**: C++20 or higher.
-* **Platform**: Linux (requires `eventfd` and `poll`).
+* **🛡️ Enhanced Robustness**: Improve system resilience against real-world challenges, such as handling significant data jitter (arrival timing variance) and implementing automatic recovery for sensor disconnection.

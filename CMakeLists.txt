@@ -17,6 +17,52 @@ target_include_directories(
   SyncTrigger INTERFACE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
                         $<INSTALL_INTERFACE:include>)
 
+option(SYNCTRIGGER_BUILD_TESTS "Build unit tests using GTest" ON)
+option(SYNCTRIGGER_BUILD_EXAMPLES "Build example applications" ON)
+option(SYNCTRIGGER_BUILD_TOOLS "Build tools as shared library" ON)
+
+if(SYNCTRIGGER_BUILD_TESTS)
+  enable_testing()
+  add_subdirectory(tests)
+endif()
+
+if(SYNCTRIGGER_BUILD_EXAMPLES)
+  find_package(OpenCV REQUIRED)
+  find_package(Eigen3 REQUIRED)
+  find_package(depthai CONFIG REQUIRED)
+  find_package(Threads REQUIRED)
+
+  add_executable(camera_imu_sync examples/camera_imu_sync.cpp)
+
+  target_compile_definitions(camera_imu_sync PRIVATE ENABLE_ANALYZE)
+
+  target_link_libraries(
+    camera_imu_sync
+    PRIVATE SyncTrigger::SyncTrigger SyncTrigger::tools Eigen3::Eigen
+            depthai::core ${OpenCV_LIBS} Threads::Threads)
+endif()
+
+if(SYNCTRIGGER_BUILD_TOOLS)
+  add_library(tools SHARED src/statistical_analyzer.cpp)
+
+  target_include_directories(
+    tools PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+                 $<INSTALL_INTERFACE:include>)
+
+  target_link_libraries(tools PUBLIC ${OpenCV_LIBS})
+
+  add_library(SyncTrigger::tools ALIAS tools)
+
+  install(
+    TARGETS tools
+    EXPORT SyncTriggerTargets
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    INCLUDES
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+endif()
+
 include(CMakePackageConfigHelpers)
 include(GNUInstallDirs)
 
@@ -34,7 +80,7 @@ install(
 
 write_basic_package_version_file(
   "SyncTriggerConfigVersion.cmake"
-  VERSION ${PACKAGE_VERSION}
+  VERSION ${PROJECT_VERSION}
   COMPATIBILITY SameMajorVersion)
 
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/SyncTriggerConfig.cmake"
@@ -45,21 +91,3 @@ install(FILES "${CMAKE_CURRENT_BINARY_DIR}/SyncTriggerConfig.cmake"
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/SyncTrigger)
 
 install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-
-option(SYNCTRIGGER_BUILD_EXAMPLES "Build example applications" ON)
-
-if(SYNCTRIGGER_BUILD_EXAMPLES)
-  find_package(OpenCV REQUIRED)
-  find_package(Eigen3 REQUIRED)
-  find_package(depthai CONFIG REQUIRED)
-
-  add_executable(dataBuffer examples/test_dataBuffer.cpp)
-  target_link_libraries(
-    dataBuffer PRIVATE SyncTrigger::SyncTrigger Eigen3::Eigen depthai::core
-                       ${OpenCV_LIBS})
-
-  add_executable(synchronizer examples/test_synchronizer.cpp)
-  target_link_libraries(
-    synchronizer PRIVATE SyncTrigger::SyncTrigger Eigen3::Eigen depthai::core
-                         ${OpenCV_LIBS})
-endif()
