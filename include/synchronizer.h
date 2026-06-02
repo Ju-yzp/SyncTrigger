@@ -87,7 +87,7 @@ private:
                     prev_ts_ = current_ts;
                     pending_num_ = 0;
                 } else {
-                    if (pending_num_ < 8) {
+                    if (pending_num_ < 2) {
                         pending_num_++;
                         break;
                     } else {

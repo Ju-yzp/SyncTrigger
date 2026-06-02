@@ -3,7 +3,7 @@
 
 #include <memory>
 
-namespace {
+namespace ts {
 struct ValueStorage {
     template <typename T>
     using Handle = T;
@@ -32,6 +32,6 @@ template <typename T, typename D>
 struct is_unique_ptr<std::unique_ptr<T, D>> : std::true_type {};
 
 enum class BufferStrategy : uint8_t { Dynamic = 0, FixedSize = 1, Discard = 2 };
-}  // namespace
+}  // namespace ts
 
 #endif

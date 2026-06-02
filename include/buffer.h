@@ -137,55 +137,70 @@ public:
             throw std::runtime_error("[ts::Buffer] selectByRange: begin_ts >= end_ts");
         }
 
-        if (isSliceAvailable(ts_begin, ts_end)) {
-            auto it_begin = std::lower_bound(
-                buffer_.begin(), buffer_.end(), ts_begin,
-                [this](const Handle& h, double ts) { return get_timestamp(h) < ts; });
-            auto it_end = std::upper_bound(
-                buffer_.begin(), buffer_.end(), ts_end,
-                [this](double ts, const Handle& h) { return ts < get_timestamp(h); });
+        SharedSpinLock lock(flag_);
 
-            std::vector<Handle> result;
-            result.reserve(std::distance(it_begin, it_end) + 1);
+        if (buffer_.empty()) {
+            return {};
+        }
 
-            if (interpolator_ && it_end != buffer_.begin() && it_end != buffer_.end()) {
-                if (it_begin < it_end) {
-                    if constexpr (is_unique_ptr<Handle>::value) {
-                        result.insert(
-                            result.end(), std::make_move_iterator(it_begin),
-                            std::make_move_iterator(it_end));
-                    } else {
-                        result.insert(result.end(), it_begin, it_end);
-                    }
-                }
+        bool available = false;
+        if (ts_begin < 0) {
+            available = get_timestamp(buffer_.back()) >= ts_end;
+        } else {
+            available =
+                (get_timestamp(buffer_.front()) >= ts_begin &&
+                 get_timestamp(buffer_.back()) >= ts_end);
+        }
+        if (!available) {
+            return {};
+        }
 
-                Handle interpolated_node = interpolator_(*(it_end - 1), *it_end, ts_end);
+        auto it_begin = std::lower_bound(
+            buffer_.begin(), buffer_.end(), ts_begin,
+            [this](const Handle& h, double ts) { return get_timestamp(h) < ts; });
+        auto it_end = std::upper_bound(
+            buffer_.begin(), buffer_.end(), ts_end,
+            [this](double ts, const Handle& h) { return ts < get_timestamp(h); });
 
+        std::vector<Handle> result;
+        result.reserve(std::distance(it_begin, it_end) + 1);
+
+        if (interpolator_ && it_end != buffer_.begin() && it_end != buffer_.end()) {
+            if (it_begin < it_end) {
                 if constexpr (is_unique_ptr<Handle>::value) {
-                    interpolated_node->set_timestamp(ts_end);
+                    result.insert(
+                        result.end(), std::make_move_iterator(it_begin),
+                        std::make_move_iterator(it_end));
                 } else {
-                    interpolated_node.set_timestamp(ts_end);
+                    result.insert(result.end(), it_begin, it_end);
                 }
-                result.push_back(interpolated_node);
-                buffer_.erase(buffer_.begin(), it_end);
-                buffer_.insert(buffer_.begin(), std::move(interpolated_node));
-
-            } else {
-                if (it_begin < it_end) {
-                    if constexpr (is_unique_ptr<Handle>::value) {
-                        result.insert(
-                            result.end(), std::make_move_iterator(it_begin),
-                            std::make_move_iterator(it_end));
-                    } else {
-                        result.insert(result.end(), it_begin, it_end);
-                    }
-                }
-                buffer_.erase(buffer_.begin(), it_end);
             }
 
-            return result;
+            Handle interpolated_node = interpolator_(*(it_end - 1), *it_end, ts_end);
+
+            if constexpr (is_unique_ptr<Handle>::value) {
+                interpolated_node->set_timestamp(ts_end);
+            } else {
+                interpolated_node.set_timestamp(ts_end);
+            }
+            result.push_back(interpolated_node);
+            buffer_.erase(buffer_.begin(), it_end);
+            buffer_.insert(buffer_.begin(), std::move(interpolated_node));
+
+        } else {
+            if (it_begin < it_end) {
+                if constexpr (is_unique_ptr<Handle>::value) {
+                    result.insert(
+                        result.end(), std::make_move_iterator(it_begin),
+                        std::make_move_iterator(it_end));
+                } else {
+                    result.insert(result.end(), it_begin, it_end);
+                }
+            }
+            buffer_.erase(buffer_.begin(), it_end);
         }
-        return std::vector<Handle>();
+
+        return result;
     }
 
     std::optional<Handle> fetchNearest(const double ts) {
@@ -236,6 +251,8 @@ public:
         }
 
         if (!buffer_.empty() && get_timestamp(value) <= get_timestamp(buffer_.back())) {
+            std::cerr << "[Buffer] out-of-order dropped: ts=" << get_timestamp(value)
+                      << " <= last=" << get_timestamp(buffer_.back()) << std::endl;
             return;
         }
 #ifdef ENABLE_ANALYZER
